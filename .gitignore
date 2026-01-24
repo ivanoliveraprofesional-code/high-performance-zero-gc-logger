@@ -1,0 +1,24 @@
+# --- IDEs ---
+.idea/
+.vscode/
+*.swp
+*.iml
+.settings/
+.classpath
+.project
+bin/
+
+# --- Java / Maven ---
+target/
+*.jar
+*.war
+*.ear
+*.class
+# Ignora código generado para no ensuciar PRs
+**/generated-sources/
+**/generated-test-sources/
+
+
+# --- OS Specific ---
+Thumbs.db
+.DS_Store
