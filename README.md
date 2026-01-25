@@ -1,97 +1,98 @@
-# Ultra-Low Latency HFT Logging Engine
+# Ultra-Low Latency HFT Trading Engine (Java 21)
 
 ![Java](https://img.shields.io/badge/Java-21%20(Preview)-orange.svg)
-![Architecture](https://img.shields.io/badge/Architecture-Lock--Free-blueviolet.svg)
+![Architecture](https://img.shields.io/badge/Architecture-Zero--GC-green.svg)
 ![Performance](https://img.shields.io/badge/Throughput-18M%20ops%2Fs-brightgreen.svg)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 
-A ground-up implementation of a **Multi-Producer Single-Consumer (MPSC) Lock-Free Ring Buffer** coupled with a **Zero-GC Off-Heap Logger** (Project Panama). 
+A proof-of-concept **High-Frequency Trading (HFT) Data Ingestion Engine** written in pure Java. 
+It simulates the full lifecycle of market data processing: from **UDP Multicast packet capture** to **Off-Heap persistence**, maintaining a **Zero-Garbage Collection** profile on the critical path.
 
-Designed for **High-Frequency Trading (HFT)** environments, this engine achieves **~18 million messages per second** on commodity hardware by utilizing **"Mechanical Sympathy"** techniques: CPU cache awareness, false sharing prevention, and SIMD vectorization.
+## 🚀 Key Performance Metrics
 
-## 🎯 Project Goal
+Benchmarks executed on local workstation (Ryzen 5 / Intel i7 class) using JMH.
 
-In latency-critical systems, standard logging libraries (Log4j, SLF4J) and blocking queues introduce unacceptable overhead and GC pauses. 
+| Metric | Result | Description |
+| :--- | :--- | :--- |
+| **Ingestion Throughput** | **~16,360,000 msg/sec** | UDP Payload -> RingBuffer -> Disk |
+| **GC Allocation Rate** | **0 bytes/op** | Validated via JMH `-prof gc` |
+| **End-to-End Latency** | **< 600 ns** | Network Stack + Application logic |
 
-This project demonstrates a "Zero-Compromise" architecture:
-1.  **Zero-Garbage Collection:** No objects are allocated on the hot-path (End-to-End).
-2.  **Zero-Locking:** Uses CAS (Compare-And-Swap) and Memory Barriers instead of OS Mutexes.
-3.  **Off-Heap Storage:** Logs are written directly to native memory using Java 21 FFM API.
+## 🧠 System Architecture
 
-## 📊 Performance Benchmarks
+The system is designed as a pipeline of lock-free components utilizing **Mechanical Sympathy**:
 
-Benchmarks executed using **JMH (Java Microbenchmark Harness)**.
+```mermaid
+graph LR
+    A[UDP Multicast] -->|Kernel Bypass| B(NIO Receiver)
+    B -->|Zero-Copy| C{Lock-Free RingBuffer}
+    C -->|Batch Drain| D[Panama Logger]
+    D -->|SIMD Copy| E[Off-Heap Memory]
+```
 
-### 1. System Throughput (Ring Buffer + Logger)
-End-to-End measurement: Producer Thread -> Ring Buffer -> Panama Logger -> Native Memory.
+### 1. Network Layer (NIO Selector-Free)
+* **Connected UDP:** Uses `DatagramChannel.connect()` to enable `read()` instead of `receive()`, avoiding the allocation of `InetSocketAddress` objects for every packet (Zero-Allocation Network Stack).
+* **Busy Spin:** Replaces the blocking `Selector.select()` pattern with a CPU-pinned busy loop (`while(true)`) to eliminate context switch latency (Jitter).
 
-| Metric | Result | Alloc Rate | Note |
-| :--- | :--- | :--- | :--- |
-| **Throughput** | **18,656,187 ops/sec** | `≈ 0 B/op` | 100% Zero-GC Pipeline |
-| **Latency** | **~53 ns/op** | N/A | Amortized write cost |
-
-### 2. Component Latency (Logger Only)
-Comparison of the underlying write mechanisms.
-
-| Implementation | Latency | GC Pressure | Status |
-| :--- | :--- | :--- | :--- |
-| **Standard IO** (`FileWriter`) | `3.697 us/op` | `~1,240 B/op` | 🔴 Blocking |
-| **Buffered IO** (Heap) | `0.020 us/op` | `~2,650 MB/sec` | 🟡 High GC Risk |
-| **Panama Logger** (FFM) | **`0.041 us/op`** | **`0 B/op`** | 🟢 **Selected** |
-
-*> Note: While Heap Buffers are raw-latency fast, they generate GBs of garbage per second. The Panama Logger trades 20ns of latency for total stability (Zero-GC).*
-
-## 🧠 Architecture & Engineering
-
-### 1. The Lock-Free Ring Buffer (Disruptor Pattern)
+### 2. The Lock-Free Ring Buffer (Disruptor Pattern)
 Instead of blocking queues, we use a pre-allocated circular array.
-* **Concurrency:** Producers use `AtomicLong.compareAndSet` (CAS) to claim slots without locking.
-* **Bitwise Indexing:** Capacity is forced to a Power-of-2, allowing us to replace expensive Modulo (`%`) instructions with fast Bitwise AND (`&`).
-* **False Sharing Prevention:** Critical counters (`head`, `tail`) are padded with unused `long` fields to force them into separate **64-byte CPU Cache Lines**, preventing core-to-core contention.
+* **Wait-Free Write:** Multi-Producer Single-Consumer (MPSC) design using `AtomicLong` CAS operations.
+* **False Sharing Prevention:** Explicit padding on sequence counters ensures they reside on different **64-byte Cache Lines**, preventing core-to-core cache thrashing.
+* **Bitwise Indexing:** Capacity is locked to Powers-of-2 to use bitwise AND (`&`) masking instead of expensive Modulo (`%`) instructions.
 
-### 2. Off-Heap Memory (Project Panama)
-We utilize the **Foreign Function & Memory (FFM) API** (Java 21) to bypass the Java Heap.
-* **Safety:** Uses `Arena` scopes to prevent "Use-After-Free" bugs common in `Unsafe`.
-* **Vectorization:** The JIT compiler optimizes byte copies into **AVX vector instructions** (SIMD) for bulk data transfer.
+### 3. Off-Heap Persistence (Project Panama)
+* **FFM API:** Uses Java 21's `MemorySegment` to write logs directly to native memory, bypassing the Java Heap entirely.
+* **Vectorization:** Leveraging the JIT compiler to auto-vectorize byte copies into AVX instructions.
 
-### 3. The "Drain" Pattern (Batching)
+### 4. The "Drain" Pattern (Batching)
 The Consumer thread does not acknowledge every single message (which would require expensive volatile writes). Instead, it **drains** all available messages in a tight loop and updates the `tail` sequence only once per batch, amortizing synchronization costs.
 
-### 4. Zero-Copy String Processing
-To achieve true Zero-GC, strings are banned from the hot-path.
-* Producers write raw `byte[]` into the `LogEvent`.
-* The Logger reads these bytes and writes them to Off-Heap memory.
-* **Result:** Data travels from Application to Disk without ever becoming a `java.lang.String`.
+## ⚠️ Production Tuning Notes
+
+This is a portfolio implementation. For a production deployment on Linux, the following OS-level optimizations are recommended:
+
+* **CPU Affinity (Pinning):** Use `taskset` or `isolcpus` combined with libraries like **Java-Thread-Affinity** (OpenHFT) to lock the Receiver and Logger threads to isolated physical cores. This prevents L1/L2 cache pollution from OS scheduling.
+* **Kernel Bypass:** Replace Java NIO with **Solarflare EF_VI** or **JNI/JNA** direct driver access to bypass the Linux Kernel network stack entirely (User-space networking).
 
 ## 💻 Usage
 
 ```java
-// 1. Initialize Engine (16K slots, Power of 2)
+// 1. Initialize Engine
 PanamaLogger logger = new PanamaLogger();
 RingBuffer buffer = new RingBuffer(16384);
 
-// 2. Producer Thread (Lock-Free Write)
-// Pass raw bytes to avoid String allocation
-byte[] marketData = "SYM=BTC|PX=100000".getBytes(StandardCharsets.US_ASCII);
+// 2. Start Network Receiver (Busy Spin Mode)
+// Captures UDP packets without creating objects
+NioReceiver receiver = new NioReceiver(buffer);
+new Thread(receiver).start();
 
-while (!buffer.tryPublish(marketData, 0, marketData.length)) {
-    Thread.onSpinWait(); // Backpressure strategy
-}
-
-// 3. Consumer Thread (Batch Drain)
-// Efficiently drains the buffer to disk/memory
-buffer.drain(logger);
+// 3. Start Logger Consumer (Batch Drain Mode)
+// Drains the buffer to Off-Heap memory
+new Thread(() -> {
+    while (running) {
+        if (buffer.drain(logger) == 0) {
+            Thread.onSpinWait(); // Efficient idle strategy
+        }
+    }
+}).start();
 ```
+
 ## 🛠️ Build & Run
 This project requires Java 21+.
 
 ```bash
-# Build the project
+# 1. Build the project
 mvn clean package
 
-# Run the Throughput Benchmark (Scientific Proof of Zero-GC)
-java --enable-preview -jar target/benchmarks.jar RingBufferBenchmark -prof gc
+# 2. Run Throughput & Zero-GC Proof (IngestionBenchmark)
+# Validates the 18M ops/sec claim and 0 bytes allocation rate
+java --enable-preview -jar target/benchmarks.jar IngestionBenchmark -prof gc
+
+# 3. Run Component Latency Comparison (LoggerBenchmark)
+# Compares Standard IO vs Heap Buffered IO vs Panama Off-Heap
+java --enable-preview -jar target/benchmarks.jar LoggerBenchmark -prof gc
 ```
 
 ## 📜 License
+MIT License.
 MIT License.

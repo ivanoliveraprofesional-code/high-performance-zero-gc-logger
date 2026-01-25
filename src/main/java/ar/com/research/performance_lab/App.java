@@ -16,7 +16,7 @@ public class App {
     private static final byte[] PAYLOAD = "EXECUTION_REPORT|ID=102938475|SYM=BTC-USDT|SIDE=BUY|PX=98200.50|QTY=0.05".getBytes(StandardCharsets.US_ASCII);
 
     public static void main(String[] args) throws InterruptedException {
-        System.out.println("🔥 Iniciando HFT Engine (Zero-GC Mode)...");
+        System.out.println("Iniciando HFT Engine (Zero-GC Mode)...");
         System.out.println("Payload Size: " + PAYLOAD.length + " bytes");
 
         PanamaLogger logger = new PanamaLogger();
@@ -68,7 +68,7 @@ public class App {
         double seconds = durationNs / 1_000_000_000.0;
         long throughput = (long) (totalMsgs / seconds);
 
-        System.out.println("\n🚀 RESULTADOS FINALES 🚀");
+        System.out.println("\n RESULTADOS FINALES 🚀");
         System.out.printf("Total Mensajes: %,d\n", totalMsgs);
         System.out.printf("Tiempo Total:   %.4f s\n", seconds);
         System.out.printf("Throughput:     %,d msgs/sec\n", throughput);
