@@ -16,7 +16,7 @@ public class PanamaLogger implements AutoCloseable {
     
     private final Arena arena;
     private final MemorySegment bufferSegment;
-    private final long bufferCapacity = 1024 * 8; // 8KB
+    private final long bufferCapacity = 1024 * 8;
     private long currentOffset = 0; 
     
     private final FileChannel channel;
@@ -39,23 +39,16 @@ public class PanamaLogger implements AutoCloseable {
         }
     }
     
-    /**
-     * ZERO-GC / ZERO-COPY LOGGING
-     * Escribe bytes crudos directamente al buffer off-heap.
-     */
     public void logBytes(byte[] msg, int len) {
         if (!arena.scope().isAlive()) throw new IllegalStateException("Logger is closed");
 
         long prefixLen = PREFIX_SEG.byteSize();
         long newlineLen = NEWLINE_SEG.byteSize();
         
-        // 1. Escribir PREFIX (Bulk Copy)
         if (bufferCapacity - currentOffset < prefixLen) flush();
         MemorySegment.copy(PREFIX_SEG, 0, bufferSegment, currentOffset, prefixLen);
         currentOffset += prefixLen;
 
-        // 2. Escribir MENSAJE (Byte-by-Byte Loop -> JIT Vectorized)
-        // Check de espacio para el mensaje
         int bytesWritten = 0;
         while (bytesWritten < len) {
             long remaining = bufferCapacity - currentOffset;
@@ -66,8 +59,6 @@ public class PanamaLogger implements AutoCloseable {
 
             long toWrite = Math.min(remaining, len - bytesWritten);
 
-            // Bucle Crudo: El JIT adora esto. Lo convierte en instrucciones SIMD.
-            // No usamos MemorySegment.ofArray() para evitar crear el objeto wrapper del segmento.
             for (int i = 0; i < toWrite; i++) {
                 byte b = msg[bytesWritten + i];
                 bufferSegment.set(ValueLayout.JAVA_BYTE, currentOffset + i, b);
@@ -77,7 +68,6 @@ public class PanamaLogger implements AutoCloseable {
             bytesWritten += toWrite;
         }
 
-        // 3. Escribir NEWLINE (Bulk Copy)
         if (bufferCapacity - currentOffset < newlineLen) flush();
         MemorySegment.copy(NEWLINE_SEG, 0, bufferSegment, currentOffset, newlineLen);
         currentOffset += newlineLen;

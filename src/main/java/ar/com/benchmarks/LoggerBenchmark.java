@@ -60,19 +60,16 @@ public class LoggerBenchmark {
     
     @Benchmark
     public void testZeroGcLog() {
-        // Test de enteros (int)
         zeroGcLogger.logInt(503);
     }
 
     @Benchmark
     public void testZeroGcCharSequence() {
-        // Test de texto con CharSequence
         zeroGcLogger.logCharSequence("User login attempt failed code 503");
     }
 
     @Benchmark
     public void testPanamaLog() {
-        // Test con Java 21 FFM API (Standard)
         panamaLogger.log("User login attempt failed code 503");
     }
     
