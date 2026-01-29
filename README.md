@@ -95,4 +95,3 @@ java --enable-preview -jar target/benchmarks.jar LoggerBenchmark -prof gc
 
 ## 📜 License
 MIT License.
-MIT License.
